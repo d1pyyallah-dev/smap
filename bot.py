@@ -15,7 +15,8 @@ ACCOUNTS = [
     {"api_id": 39934985, "api_hash": "d0ff8b0d846856b0a01a99379b96e9bd"},
     {"api_id": 7216741, "api_hash": "1e85ff32d1cabb4e6e9537ae2d8218ca"},
     {"api_id": 31360840, "api_hash": "4279cc0d7ab41331200a13bf61152f4a"},
-    {"api_id": 38299331, "api_hash": "fb5e560c3bda2db7541770b2294ee137"}
+    {"api_id": 38299331, "api_hash": "fb5e560c3bda2db7541770b2294ee137"},
+    {"api_id": 35911533, "api_hash": "11dafcdc1514796c867055023716d39a"}
 ]
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
@@ -40,6 +41,13 @@ def clean_phone(phone):
         phone = '+' + phone
     return phone
 
+def safe_edit(chat_id, msg_id, text, reply_markup=None):
+    try:
+        bot.edit_message_text(text, chat_id, msg_id, reply_markup=reply_markup)
+    except Exception as e:
+        if "message is not modified" not in str(e):
+            print(f"Edit error: {e}")
+
 def send_codes_sync(chat_id, msg_id, phone):
     async def send_codes():
         log_msg = bot.send_message(chat_id, "otpravka nachata...")
@@ -63,7 +71,7 @@ def send_codes_sync(chat_id, msg_id, phone):
                         max_flood = e.seconds
                     remaining = e.seconds
                     while remaining > 0:
-                        bot.edit_message_text(f"floodwait - {remaining} sekund", chat_id, msg_id)
+                        safe_edit(chat_id, msg_id, f"floodwait - {remaining} sekund")
                         await asyncio.sleep(1)
                         remaining -= 1
                     attempt += 1
@@ -76,17 +84,17 @@ def send_codes_sync(chat_id, msg_id, phone):
         tasks = [send_one_client(client, i+1) for i, client in enumerate(clients)]
         results = await asyncio.gather(*tasks)
         total_sent = sum(results)
-        bot.edit_message_text(f"otpravleno {total_sent} codov", chat_id, log_msg.message_id)
-        bot.edit_message_text("gotovo", chat_id, msg_id)
+        safe_edit(chat_id, log_msg.message_id, f"otpravleno {total_sent} codov")
+        safe_edit(chat_id, msg_id, "gotovo")
         if max_flood > 0:
             remaining = max_flood
             while remaining > 0:
-                bot.edit_message_text(f"floodwait - {remaining} sekund", chat_id, msg_id)
+                safe_edit(chat_id, msg_id, f"floodwait - {remaining} sekund")
                 time.sleep(1)
                 remaining -= 1
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("spam", callback_data="spam"))
-        bot.edit_message_text("floodwait zakonchen, mozhesh dalshe spamit", chat_id, msg_id, reply_markup=kb)
+        safe_edit(chat_id, msg_id, "floodwait zakonchen, mozhesh dalshe spamit", reply_markup=kb)
         if chat_id in user_states:
             user_states[chat_id]["timer_task"] = None
 
@@ -107,7 +115,7 @@ def spam_callback(call):
     if not state:
         bot.answer_callback_query(call.id)
         return
-    bot.edit_message_text("napishi nomer", chat_id, state["message_id"])
+    safe_edit(chat_id, state["message_id"], "napishi nomer")
     state["waiting_phone"] = True
     bot.answer_callback_query(call.id)
 
