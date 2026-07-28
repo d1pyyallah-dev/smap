@@ -31,25 +31,33 @@ def load_proxies():
             lines = [line.strip() for line in f if line.strip()]
         proxies = []
         for line in lines:
-            if "://" in line:
-                parts = line.split("://")
-                if len(parts) == 2:
-                    proto, addr = parts
-                    if ":" in addr:
-                        ip, port = addr.split(":")
-                        proxies.append((proto, ip, int(port)))
+            username = password = None
+            if "@" in line:
+                auth, addr = line.split("@", 1)
+                if ":" in auth:
+                    username, password = auth.split(":", 1)
+                if ":" in addr:
+                    ip, port = addr.split(":", 1)
+                    proxies.append((ip, int(port), username, password))
             else:
                 if ":" in line:
-                    ip, port = line.split(":")
-                    proxies.append(("socks5", ip, int(port)))
+                    ip, port = line.split(":", 1)
+                    proxies.append((ip, int(port), None, None))
         return proxies
     except Exception as e:
         print(f"Ошибка загрузки proxy.txt: {e}")
         return []
 
+def build_proxy_tuple(ip, port, username=None, password=None):
+    if username and password:
+        return (socks.SOCKS5, ip, port, username, password)
+    else:
+        return (socks.SOCKS5, ip, port)
+
 async def check_proxy(proxy):
-    proto, ip, port = proxy
-    client = TelegramClient(None, 12345, "fakehash", proxy=(socks.SOCKS5, ip, port) if proto == "socks5" else None)
+    ip, port, username, password = proxy
+    proxy_tuple = build_proxy_tuple(ip, port, username, password)
+    client = TelegramClient(None, 12345, "fakehash", proxy=proxy_tuple)
     try:
         await asyncio.wait_for(client.connect(), timeout=2)
         await client.disconnect()
@@ -65,10 +73,11 @@ def safe_edit(chat_id, msg_id, text, reply_markup=None):
             print(f"Edit error: {e}")
 
 async def send_code_with_proxy(client_acc, phone, proxy):
+    ip, port, username, password = proxy
     api_id = client_acc["api_id"]
     api_hash = client_acc["api_hash"]
-    proto, ip, port = proxy
-    client = TelegramClient(None, api_id, api_hash, proxy=(socks.SOCKS5, ip, port) if proto == "socks5" else None)
+    proxy_tuple = build_proxy_tuple(ip, port, username, password)
+    client = TelegramClient(None, api_id, api_hash, proxy=proxy_tuple)
     try:
         await client.connect()
         await client.send_code_request(phone)
