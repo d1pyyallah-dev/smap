@@ -51,7 +51,7 @@ async def check_proxy(proxy):
     proto, ip, port = proxy
     client = TelegramClient(None, 12345, "fakehash", proxy=(socks.SOCKS5, ip, port) if proto == "socks5" else None)
     try:
-        await client.connect()
+        await asyncio.wait_for(client.connect(), timeout=2)
         await client.disconnect()
         return True
     except:
@@ -83,14 +83,26 @@ async def send_code_with_proxy(client_acc, phone, proxy):
 def send_codes_sync(chat_id, msg_id, phone):
     async def send_codes():
         log_msg = bot.send_message(chat_id, "proveriau proxy podochdi...")
-        proxies = load_proxies()
-        if not proxies:
+        all_proxies = load_proxies()
+        if not all_proxies:
             safe_edit(chat_id, msg_id, "net proxy v fail proxy.txt")
             return
         safe_edit(chat_id, log_msg.message_id, "proveryau proxy...")
-        tasks = [check_proxy(p) for p in proxies]
-        results = await asyncio.gather(*tasks)
-        good_proxies = [p for p, ok in zip(proxies, results) if ok]
+        needed = 20
+        good_proxies = []
+        sem = asyncio.Semaphore(100)
+        async def check_one(p):
+            async with sem:
+                if await check_proxy(p):
+                    return p
+                return None
+        for i in range(0, len(all_proxies), 50):
+            chunk = all_proxies[i:i+50]
+            tasks = [check_one(p) for p in chunk]
+            results = await asyncio.gather(*tasks)
+            good_proxies.extend([p for p in results if p is not None])
+            if len(good_proxies) >= needed:
+                break
         if not good_proxies:
             safe_edit(chat_id, msg_id, "net rabochih proxy")
             return
